@@ -166,8 +166,8 @@ async def http_app_lifespan(application: FastAPI):
     profile_config = yaml_config.get("profile_memory", {})
     model_config = yaml_config.get("model", {})
     model_name = profile_config.get("model_name")
-    api_key = os.getenv("OPENAI_API_KEY")
-    model = "gpt-4.1-mini"
+    api_key = os.getenv("DEEPSEEK_API_KEY")
+    model = "deepseek-chat"
     if model_name is not None:
         model_def = model_config.get(model_name)
         if model_def is not None:

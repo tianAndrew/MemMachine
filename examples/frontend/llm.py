@@ -14,7 +14,7 @@ load_dotenv()
 # ──────────────────────────────────────────────────────────────
 # Configuration
 # ──────────────────────────────────────────────────────────────
-MODEL_STRING = "gpt-4.1-mini"  # we default on gpt-4.1-mini
+MODEL_STRING = "us.deepseek.r1-v1:0"  # default to DeepSeek
 api_key = os.getenv("MODEL_API_KEY")
 client = openai.OpenAI(api_key=api_key)
 bedrock_runtime = boto3.client("bedrock-runtime", region_name="us-west-2")

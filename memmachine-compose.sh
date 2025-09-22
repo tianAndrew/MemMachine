@@ -52,7 +52,7 @@ check_env_file() {
             cp sample_configs/env.dockercompose .env
             print_success "Created .env file from sample_configs/env.dockercompose"
             print_warning "Please edit .env file with your configuration before continuing"
-            print_warning "Especially set your OPENAI_API_KEY"
+            print_warning "Especially set your DEEPSEEK_API_KEY"
             print_info "Exiting script. Please edit .env file and re-run the script."
             exit 0
         else
@@ -89,12 +89,12 @@ check_required_env() {
     if [ -f ".env" ]; then
         source .env
         
-        if [ -z "$OPENAI_API_KEY" ] || [ "$OPENAI_API_KEY" = "your_openai_api_key_here" ]; then
-            print_warning "OPENAI_API_KEY is not set or is using placeholder value"
-            print_warning "Please set your OpenAI API key in the .env file"
+        if [ -z "$DEEPSEEK_API_KEY" ] || [ "$DEEPSEEK_API_KEY" = "your_deepseek_api_key_here" ]; then
+            print_warning "DEEPSEEK_API_KEY is not set or is using placeholder value"
+            print_warning "Please set your DeepSeek API key in the .env file"
             read -p "Press Enter to continue anyway (some features may not work)..."
         else
-            print_success "OPENAI_API_KEY is configured"
+            print_success "DEEPSEEK_API_KEY is configured"
         fi
     fi
 }

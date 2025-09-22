@@ -46,7 +46,7 @@ class OpenAILanguageModel(LanguageModel):
         """
         super().__init__()
 
-        self._model = config.get("model", "gpt-5-nano")
+        self._model = config.get("model", "deepseek-chat")
 
         api_key = config.get("api_key")
         if api_key is None:

@@ -59,7 +59,7 @@ print("using .env at", dotenv.find_dotenv())
 dotenv.load_dotenv()
 
 set_tracing_export_api_key(os.getenv("TRACE_API_KEY"))
-set_default_openai_key(os.getenv("OPENAI_API_KEY"))
+set_default_openai_key(os.getenv("DEEPSEEK_API_KEY"))
 
 
 async def search_memories(

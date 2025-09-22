@@ -14,9 +14,9 @@ SessionDB:
 
 Model:
   testmodel:
-    model_vendor: openai
-    model_name: "gpt-4o-mini"
-    api_key: <YOUR_API_KEY>
+    model_vendor: deepseek
+    model_name: "deepseek-chat"
+    api_key: <DEEPSEEK_API_KEY>
     
 storage:
   my_storage_id:
@@ -34,8 +34,8 @@ sessionMemory:
 
 embedder:
   my_embedder_id:
-    model_name: "text-embedding-3-small"
-    api_key: <YOUR_API_KEY>
+    model_name: "deepseek-embedding"
+    api_key: <DEEPSEEK_API_KEY>
 
 reranker:
   my_reranker_id:

@@ -29,7 +29,7 @@ class OpenAIEmbedder(Embedder):
                   API key for accessing the OpenAI service.
                 - model (str, optional):
                   Name of the OpenAI embedding model to use
-                  (default: "text-embedding-3-small").
+                  (default: "deepseek-embedding").
                 - metrics_factory (MetricsFactory, optional):
                   An instance of MetricsFactory
                   for collecting usage metrics.
@@ -44,7 +44,7 @@ class OpenAIEmbedder(Embedder):
         """
         super().__init__()
 
-        self._model = config.get("model", "text-embedding-3-small")
+        self._model = config.get("model", "deepseek-embedding")
 
         api_key = config.get("api_key")
         if api_key is None:

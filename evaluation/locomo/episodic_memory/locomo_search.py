@@ -166,7 +166,7 @@ async def main():
     )
 
     model = AsyncOpenAI(
-        api_key=os.getenv("OPENAI_API_KEY"),
+        api_key=os.getenv("DEEPSEEK_API_KEY"),
     )
 
     results: dict[str, Any] = {}

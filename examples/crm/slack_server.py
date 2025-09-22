@@ -239,10 +239,10 @@ async def generate_openai_response(formatted_query: str, original_query: str) ->
     try:
         import openai
 
-        api_key = os.getenv("OPENAI_API_KEY")
+        api_key = os.getenv("DEEPSEEK_API_KEY")
         if not api_key:
-            logger.error("OPENAI_API_KEY not found in environment")
-            return "⚠️ OpenAI API key not configured"
+            logger.error("DEEPSEEK_API_KEY not found in environment")
+            return "⚠️ DeepSeek API key not configured"
 
         client = openai.AsyncOpenAI(api_key=api_key)
 

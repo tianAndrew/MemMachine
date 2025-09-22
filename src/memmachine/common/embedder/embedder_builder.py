@@ -62,7 +62,7 @@ class EmbedderBuilder(Builder):
 
                 return OpenAIEmbedder(
                     {
-                        "model": config.get("model", "text-embedding-3-small"),
+                        "model": config.get("model", "deepseek-embedding"),
                         "api_key": config["api_key"],
                         "metrics_factory": injected_metrics_factory,
                         "user_metrics_labels": config.get(
