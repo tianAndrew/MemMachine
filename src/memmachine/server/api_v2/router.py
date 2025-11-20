@@ -209,15 +209,20 @@ async def add_memories(
     session_key = f"{spec.org_id}/{spec.project_id}"
 
     for message in spec.messages:
+        # Extract producer and produced_for: prioritize message.producer, fallback to metadata
+        metadata = message.metadata or {}
+        producer_id = message.producer or metadata.get("producer")
+        produced_for_id = metadata.get("produced_for")
+        
         await episodic_memory.add_memory_episode(
             episode=Episode(
                 uid=str(uuid4()),
                 content=message.content,
                 session_key=session_key,
                 created_at=message.timestamp,
-                producer_id=message.producer,
+                producer_id=producer_id,
                 producer_role=message.role,
-                produced_for_id=None,
+                produced_for_id=produced_for_id,
                 filterable_metadata=message.metadata,
             )
         )
