@@ -61,19 +61,69 @@ async def llm_feature_update(
         "</HISTORY>\n"
     )
 
+    # Log the input for debugging
+    logger.info(
+        "LLM input - message content length: %d, existing features count: %d",
+        len(message_content) if message_content else 0,
+        len(features),
+    )
+    logger.debug(
+        "LLM input - message content: %s",
+        message_content[:200] if message_content else "empty",
+    )
+    logger.debug(
+        "LLM input - existing features: %s",
+        json.dumps(_features_to_llm_format(features))[:500] if features else "{}",
+    )
+
     parsed_output = await model.generate_parsed_response(
         system_prompt=update_prompt,
         user_prompt=user_prompt,
         output_format=_SemanticFeatureUpdateRes,
     )
 
-    if parsed_output is None:
-        return []
-
-    validated_output = TypeAdapter(_SemanticFeatureUpdateRes).validate_python(
+    # Log the raw LLM output
+    logger.info(
+        "LLM raw output (parsed_output): %s",
         parsed_output,
     )
-    return validated_output.commands
+    
+    if parsed_output is None:
+        logger.warning(
+            "LLM returned None for message content: %s...",
+            message_content[:100] if message_content else "empty",
+        )
+        return []
+
+    try:
+        # Log the parsed output before validation
+        logger.info(
+            "LLM parsed output (before validation): %s",
+            parsed_output,
+        )
+        
+        validated_output = TypeAdapter(_SemanticFeatureUpdateRes).validate_python(
+            parsed_output,
+        )
+        
+        # Log the validated output
+        logger.info(
+            "LLM validated output: %s",
+            validated_output.model_dump_json() if hasattr(validated_output, "model_dump_json") else str(validated_output),
+        )
+        logger.info(
+            "LLM commands count: %d, commands: %s",
+            len(validated_output.commands),
+            [cmd.model_dump() if hasattr(cmd, "model_dump") else str(cmd) for cmd in validated_output.commands],
+        )
+        return validated_output.commands
+    except Exception as e:
+        logger.exception(
+            "Failed to validate LLM output. Raw output: %s, Error: %s",
+            parsed_output,
+            e,
+        )
+        return []
 
 
 class LLMReducedFeature(BaseModel):

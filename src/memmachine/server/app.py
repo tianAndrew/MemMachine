@@ -512,6 +512,10 @@ async def initialize_resource(config_file: str) -> ResourceManagerImpl:
     config = load_config_yml_file(config_file)
     ret = ResourceManagerImpl(config)
     await ret.build()
+    # Start semantic service to enable background ingestion
+    semantic_manager = await ret.get_semantic_manager()
+    semantic_service = await semantic_manager.get_semantic_service()
+    await semantic_service.start()
     return ret
 
 
@@ -525,6 +529,10 @@ async def init_global_memory() -> None:
 async def shutdown_global_memory() -> None:
     """Shut down global resources and close connections."""
     global resource_manager
+    if resource_manager is not None:
+        await resource_manager.close()
+    if resource_manager is not None:
+        await resource_manager.close()
 
 
 @asynccontextmanager

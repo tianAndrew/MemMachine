@@ -44,6 +44,7 @@ class Episode(BaseEpisodeStore):
 
     __tablename__ = "episodestore"
     id = mapped_column(Integer, primary_key=True)
+    uid = mapped_column(String, nullable=True, unique=True, index=True)
 
     content = mapped_column(String, nullable=False)
 
@@ -90,7 +91,7 @@ class Episode(BaseEpisodeStore):
             else self.created_at
         )
         return EpisodeE(
-            uid=EpisodeIdT(self.id),
+            uid=EpisodeIdT(self.uid) if self.uid else EpisodeIdT(str(self.id)),
             content=self.content,
             session_key=self.session_key,
             producer_id=self.producer_id,
@@ -128,6 +129,7 @@ class SqlAlchemyEpisodeStore(EpisodeStorage):
         episode_type: EpisodeType | None = None,
         metadata: dict[str, JsonValue] | None = None,
         created_at: AwareDatetime | None = None,
+        uid: str | None = None,
     ) -> EpisodeIdT:
         stmt = (
             insert(Episode)
@@ -136,6 +138,7 @@ class SqlAlchemyEpisodeStore(EpisodeStorage):
                 session_key=session_key,
                 producer_id=producer_id,
                 producer_role=producer_role,
+                uid=uid,
             )
             .returning(Episode.id)
         )
@@ -156,16 +159,28 @@ class SqlAlchemyEpisodeStore(EpisodeStorage):
             result = await session.execute(stmt)
             await session.commit()
             episode_id = result.scalar_one()
-
-        return EpisodeIdT(episode_id)
+            # If uid was provided, return it; otherwise return the integer id as string
+            if uid:
+                return EpisodeIdT(uid)
+            return EpisodeIdT(str(episode_id))
 
     @validate_call
     async def get_episode(self, episode_id: EpisodeIdT) -> EpisodeE | None:
-        stmt = (
-            select(Episode)
-            .where(Episode.id == int(episode_id))
-            .order_by(Episode.created_at.asc())
-        )
+        # Try to parse as int first (legacy support), otherwise use uid
+        try:
+            int_id = int(episode_id)
+            stmt = (
+                select(Episode)
+                .where(Episode.id == int_id)
+                .order_by(Episode.created_at.asc())
+            )
+        except ValueError:
+            # Not an integer, treat as uid (UUID string)
+            stmt = (
+                select(Episode)
+                .where(Episode.uid == episode_id)
+                .order_by(Episode.created_at.asc())
+            )
 
         async with self._create_session() as session:
             result = await session.execute(stmt)
@@ -256,9 +271,31 @@ class SqlAlchemyEpisodeStore(EpisodeStorage):
 
     @validate_call
     async def delete_episode(self, episode_ids: list[EpisodeIdT]) -> None:
-        int_episode_ids = [int(h_id) for h_id in episode_ids]
+        # Separate integer IDs and UUID strings
+        int_ids = []
+        uid_strings = []
+        for h_id in episode_ids:
+            try:
+                int_ids.append(int(h_id))
+            except ValueError:
+                uid_strings.append(h_id)
 
-        stmt = delete(Episode).where(Episode.id.in_(int_episode_ids))
+        # Build delete statement for both id and uid
+        conditions = []
+        if int_ids:
+            conditions.append(Episode.id.in_(int_ids))
+        if uid_strings:
+            conditions.append(Episode.uid.in_(uid_strings))
+
+        if not conditions:
+            return
+
+        stmt = delete(Episode)
+        if len(conditions) == 1:
+            stmt = stmt.where(conditions[0])
+        else:
+            from sqlalchemy import or_
+            stmt = stmt.where(or_(*conditions))
 
         async with self._create_session() as session:
             await session.execute(stmt)

@@ -66,6 +66,7 @@ class IngestionService:
             raise ExceptionGroup("Failed to process set ids", errors)
 
     async def _process_single_set(self, set_id: str) -> None:  # noqa: C901
+        logger.info("Processing set_id: %s", set_id)
         resources = self._resource_retriever.get_resources(set_id)
 
         history_ids = await self._semantic_storage.get_history_messages(
@@ -73,28 +74,76 @@ class IngestionService:
             limit=50,
             is_ingested=False,
         )
+        logger.info(
+            "Found %d uningested message(s) for set_id %s",
+            len(history_ids),
+            set_id,
+        )
 
+        logger.info(
+            "Found %d semantic category/categories for set_id %s",
+            len(resources.semantic_categories),
+            set_id,
+        )
         if len(resources.semantic_categories) == 0:
+            logger.warning(
+                "No semantic categories configured for set_id %s, marking messages as ingested",
+                set_id,
+            )
             await self._semantic_storage.mark_messages_ingested(
                 set_id=set_id,
                 history_ids=history_ids,
             )
+            return
 
         if len(history_ids) == 0:
             return
 
         raw_messages = await asyncio.gather(
             *[self._history_store.get_episode(h_id) for h_id in history_ids],
+            return_exceptions=True,
         )
 
-        if len(raw_messages) != len([m for m in raw_messages if m is not None]):
-            raise ValueError("Failed to retrieve messages. Invalid history_ids")
+        # Filter out None values and exceptions, log warnings for missing episodes
+        valid_messages = []
+        for i, msg in enumerate(raw_messages):
+            if isinstance(msg, Exception):
+                logger.warning(
+                    "Failed to retrieve episode %s: %s",
+                    history_ids[i],
+                    msg,
+                )
+            elif msg is None:
+                logger.warning(
+                    "Episode %s not found in storage",
+                    history_ids[i],
+                )
+            else:
+                valid_messages.append(msg)
 
-        messages = TypeAdapter(list[Episode]).validate_python(raw_messages)
+        if len(valid_messages) == 0:
+            logger.warning(
+                "No valid messages found for set_id %s, skipping",
+                set_id,
+            )
+            # Mark all history_ids as ingested to avoid retrying
+            await self._semantic_storage.mark_messages_ingested(
+                set_id=set_id,
+                history_ids=history_ids,
+            )
+            return
+
+        messages = TypeAdapter(list[Episode]).validate_python(valid_messages)
 
         async def process_semantic_type(
             semantic_category: InstanceOf[SemanticCategory],
         ) -> None:
+            logger.info(
+                "Processing semantic category '%s' for set_id %s with %d message(s)",
+                semantic_category.name,
+                set_id,
+                len(messages),
+            )
             for message in messages:
                 if message.uid is None:
                     raise ValueError(
@@ -106,34 +155,103 @@ class IngestionService:
                     set_ids=[set_id],
                     category_names=[semantic_category.name],
                 )
+                logger.debug(
+                    "Found %d existing feature(s) for category '%s'",
+                    len(features),
+                    semantic_category.name,
+                )
 
                 try:
+                    logger.info(
+                        "Calling LLM to extract features from message %s (content: %s...)",
+                        message.uid,
+                        message.content[:50] if message.content else "empty",
+                    )
                     commands = await llm_feature_update(
                         features=features,
                         message_content=message.content,
                         model=resources.language_model,
                         update_prompt=semantic_category.prompt.update_prompt,
                     )
-                except Exception:
+                    logger.info(
+                        "LLM returned %d command(s) for message %s",
+                        len(commands),
+                        message.uid,
+                    )
+                except Exception as e:
                     logger.exception(
-                        "Failed to process message %s for semantic type %s",
+                        "Failed to process message %s for semantic type %s: %s",
                         message.uid,
                         semantic_category.name,
+                        e,
                     )
                     if self._debug_fail_loudly:
                         raise
-
+                    # Still mark as processed to avoid infinite retries
+                    if message.uid not in mark_messages:
+                        mark_messages.append(message.uid)
                     continue
 
-                await self._apply_commands(
-                    commands=commands,
-                    set_id=set_id,
-                    category_name=semantic_category.name,
-                    citation_id=message.uid,
-                    embedder=resources.embedder,
-                )
+                if len(commands) == 0:
+                    logger.info(
+                        "LLM returned no commands for message %s in category '%s', marking as processed",
+                        message.uid,
+                        semantic_category.name,
+                    )
+                    if message.uid not in mark_messages:
+                        mark_messages.append(message.uid)
+                    continue
 
-                mark_messages.append(message.uid)
+                try:
+                    logger.info(
+                        "Applying %d command(s) for message %s in category '%s'",
+                        len(commands),
+                        message.uid,
+                        semantic_category.name,
+                    )
+                    await self._apply_commands(
+                        commands=commands,
+                        set_id=set_id,
+                        category_name=semantic_category.name,
+                        citation_id=message.uid,
+                        embedder=resources.embedder,
+                    )
+                    logger.info(
+                        "Successfully applied commands for message %s in category '%s'",
+                        message.uid,
+                        semantic_category.name,
+                    )
+                except Exception as e:
+                    logger.exception(
+                        "Failed to apply commands for message %s in category '%s': %s",
+                        message.uid,
+                        semantic_category.name,
+                        e,
+                    )
+                    # Still mark as processed to avoid infinite retries
+                    if message.uid not in mark_messages:
+                        mark_messages.append(message.uid)
+                    continue
+
+                if message.uid not in mark_messages:
+                    mark_messages.append(message.uid)
+
+        if len(resources.semantic_categories) == 0:
+            logger.warning(
+                "No semantic categories configured for set_id %s, marking all messages as ingested",
+                set_id,
+            )
+            await self._semantic_storage.mark_messages_ingested(
+                set_id=set_id,
+                history_ids=history_ids,
+            )
+            return
+
+        logger.info(
+            "Processing %d message(s) with %d semantic category/categories",
+            len(messages),
+            len(resources.semantic_categories),
+        )
 
         mark_messages: list[EpisodeIdT] = []
         semantic_category_runners = []
@@ -144,8 +262,36 @@ class IngestionService:
         await asyncio.gather(*semantic_category_runners)
 
         if len(mark_messages) == 0:
+            logger.warning(
+                "No messages were processed for set_id %s. Possible reasons:",
+                set_id,
+            )
+            logger.warning(
+                "  - LLM calls failed for all messages (check exception logs above)",
+            )
+            logger.warning(
+                "  - LLM returned empty commands for all messages",
+            )
+            logger.warning(
+                "  - _apply_commands failed silently",
+            )
+            # Don't return, still mark as ingested to avoid infinite retries
+            # But log a warning so we know something is wrong
+            logger.warning(
+                "Marking all %d history_ids as ingested to prevent infinite retries",
+                len(history_ids),
+            )
+            await self._semantic_storage.mark_messages_ingested(
+                set_id=set_id,
+                history_ids=history_ids,
+            )
             return
 
+        logger.info(
+            "Marking %d message(s) as ingested for set_id %s",
+            len(mark_messages),
+            set_id,
+        )
         await self._semantic_storage.mark_messages_ingested(
             set_id=set_id,
             history_ids=mark_messages,
@@ -168,6 +314,14 @@ class IngestionService:
         for command in commands:
             match command.command:
                 case SemanticCommandType.ADD:
+                    logger.info(
+                        "Adding feature: set_id=%s, category=%s, tag=%s, feature=%s, value=%s",
+                        set_id,
+                        category_name,
+                        command.tag,
+                        command.feature,
+                        command.value[:100] if command.value else "empty",
+                    )
                     value_embedding = (await embedder.ingest_embed([command.value]))[0]
 
                     f_id = await self._semantic_storage.add_feature(
@@ -178,9 +332,19 @@ class IngestionService:
                         tag=command.tag,
                         embedding=np.array(value_embedding),
                     )
+                    logger.info(
+                        "Successfully stored feature with id=%s for set_id=%s",
+                        f_id,
+                        set_id,
+                    )
 
                     if citation_id is not None:
                         await self._semantic_storage.add_citations(f_id, [citation_id])
+                        logger.info(
+                            "Added citation: feature_id=%s, citation_id=%s",
+                            f_id,
+                            citation_id,
+                        )
 
                 case SemanticCommandType.DELETE:
                     await self._semantic_storage.delete_feature_set(

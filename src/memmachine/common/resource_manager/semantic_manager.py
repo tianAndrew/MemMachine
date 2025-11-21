@@ -105,11 +105,16 @@ class SemanticResourceManager:
         database = self._conf.database
         try:
             sql_engine = await self._resource_manager.get_sql_engine(database)
-            return SqlAlchemyPgVectorSemanticStorage(sql_engine)
+            storage = SqlAlchemyPgVectorSemanticStorage(sql_engine)
+            # Initialize database (run Alembic migrations)
+            await storage.startup()
+            return storage
         except ValueError:
             # try graph store
             neo4j_engine = await self._resource_manager.get_neo4j_driver(database)
-            return Neo4jSemanticStorage(neo4j_engine)
+            storage = Neo4jSemanticStorage(neo4j_engine)
+            await storage.startup()
+            return storage
 
     async def get_semantic_service(self) -> SemanticService:
         """Return the semantic service, constructing it if needed."""

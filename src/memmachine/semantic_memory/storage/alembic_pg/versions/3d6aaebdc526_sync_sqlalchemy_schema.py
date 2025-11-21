@@ -46,147 +46,390 @@ def upgrade() -> None:
     )
 
     # Column renames & transformations on feature
+    # Check which columns exist before renaming
+    op.execute(
+        """
+        DO $$
+        BEGIN
+            -- Rename user_id to set_id if user_id exists and set_id doesn't
+            IF EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_schema = 'public' AND table_name = 'feature' AND column_name = 'user_id'
+            ) AND NOT EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_schema = 'public' AND table_name = 'feature' AND column_name = 'set_id'
+            ) THEN
+                ALTER TABLE feature RENAME COLUMN user_id TO set_id;
+            END IF;
+            
+            -- Rename tag to tag_id if tag exists and tag_id doesn't
+            IF EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_schema = 'public' AND table_name = 'feature' AND column_name = 'tag'
+            ) AND NOT EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_schema = 'public' AND table_name = 'feature' AND column_name = 'tag_id'
+            ) THEN
+                ALTER TABLE feature RENAME COLUMN tag TO tag_id;
+            END IF;
+            
+            -- Rename create_at to created_at if create_at exists and created_at doesn't
+            IF EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_schema = 'public' AND table_name = 'feature' AND column_name = 'create_at'
+            ) AND NOT EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_schema = 'public' AND table_name = 'feature' AND column_name = 'created_at'
+            ) THEN
+                ALTER TABLE feature RENAME COLUMN create_at TO created_at;
+            END IF;
+            
+            -- Rename update_at to updated_at if update_at exists and updated_at doesn't
+            IF EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_schema = 'public' AND table_name = 'feature' AND column_name = 'update_at'
+            ) AND NOT EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_schema = 'public' AND table_name = 'feature' AND column_name = 'updated_at'
+            ) THEN
+                ALTER TABLE feature RENAME COLUMN update_at TO updated_at;
+            END IF;
+        END$$;
+        """,
+    )
+    
     with op.batch_alter_table("feature", schema=None) as b:
-        # If a column is already renamed, PostgreSQL will error. Use IF EXISTS via two-step try blocks.
-        # batch_alter_table doesn't support IF EXISTS directly, so rely on presence tests via SQL.
-        b.alter_column("user_id", new_column_name="set_id", existing_type=sa.TEXT())
-        b.alter_column("tag", new_column_name="tag_id", existing_type=sa.TEXT())
-        b.alter_column(
-            "create_at",
-            new_column_name="created_at",
-            existing_type=pg.TIMESTAMP(timezone=True),
+        # Add semantic_type_id if it doesn't exist
+        op.execute(
+            """
+            DO $$
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_schema = 'public' AND table_name = 'feature' AND column_name = 'semantic_type_id'
+                ) THEN
+                    ALTER TABLE feature ADD COLUMN semantic_type_id VARCHAR DEFAULT 'default';
+                END IF;
+            END$$;
+            """,
         )
-        b.alter_column(
-            "update_at",
-            new_column_name="updated_at",
-            existing_type=pg.TIMESTAMP(timezone=True),
+        # Drop isolations if it exists
+        op.execute(
+            """
+            DO $$
+            BEGIN
+                IF EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_schema = 'public' AND table_name = 'feature' AND column_name = 'isolations'
+                ) THEN
+                    ALTER TABLE feature DROP COLUMN isolations;
+                END IF;
+            END$$;
+            """,
         )
-        b.add_column(
-            sa.Column(
-                "semantic_type_id",
-                sa.String(),
-                server_default=sa.text("'default'"),
-            ),
-        )
-        b.drop_column("isolations")
 
     # Type fixes / defaults
-    op.alter_column(
-        "feature",
-        "created_at",
-        type_=sa.TIMESTAMP(timezone=False),
-        postgresql_using="created_at::timestamp",
-        existing_type=pg.TIMESTAMP(timezone=True),
+    # Change created_at type if it exists and is timestamptz
+    op.execute(
+        """
+        DO $$
+        BEGIN
+            IF EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_schema = 'public' AND table_name = 'feature' 
+                  AND column_name = 'created_at'
+                  AND data_type = 'timestamp with time zone'
+            ) THEN
+                ALTER TABLE feature ALTER COLUMN created_at TYPE timestamp USING created_at::timestamp;
+            END IF;
+        END$$;
+        """,
     )
-    op.alter_column(
-        "feature",
-        "updated_at",
-        type_=sa.TIMESTAMP(timezone=False),
-        postgresql_using="updated_at::timestamp",
-        existing_type=pg.TIMESTAMP(timezone=True),
+    # Change updated_at type if it exists and is timestamptz
+    op.execute(
+        """
+        DO $$
+        BEGIN
+            IF EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_schema = 'public' AND table_name = 'feature' 
+                  AND column_name = 'updated_at'
+                  AND data_type = 'timestamp with time zone'
+            ) THEN
+                ALTER TABLE feature ALTER COLUMN updated_at TYPE timestamp USING updated_at::timestamp;
+            END IF;
+        END$$;
+        """,
     )
-    op.alter_column(
-        "feature",
-        "metadata",
-        type_=pg.JSONB(),
-        postgresql_using="metadata::jsonb",
-        server_default=sa.text("'{}'::jsonb"),
+    # Change metadata type if it exists and is not jsonb
+    op.execute(
+        """
+        DO $$
+        BEGIN
+            IF EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_schema = 'public' AND table_name = 'feature' AND column_name = 'metadata'
+            ) THEN
+                -- Set default if not already set
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_schema = 'public' AND table_name = 'feature' 
+                      AND column_name = 'metadata'
+                      AND column_default = '''{}''::jsonb'
+                ) THEN
+                    ALTER TABLE feature ALTER COLUMN metadata SET DEFAULT '{}'::jsonb;
+                END IF;
+                -- Change type if not already jsonb
+                IF EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_schema = 'public' AND table_name = 'feature' 
+                      AND column_name = 'metadata'
+                      AND data_type != 'jsonb'
+                ) THEN
+                    ALTER TABLE feature ALTER COLUMN metadata TYPE jsonb USING metadata::jsonb;
+                END IF;
+            END IF;
+        END$$;
+        """,
     )
 
     # Indexes
     op.execute("DROP INDEX IF EXISTS prof_user_idx")
-    op.create_index("idx_feature_set_id", "feature", ["set_id"])
-    op.create_index(
-        "idx_feature_set_id_semantic_type",
-        "feature",
-        ["set_id", "semantic_type_id"],
-    )
-    op.create_index(
-        "idx_feature_set_semantic_type_tag",
-        "feature",
-        ["set_id", "semantic_type_id", "tag_id"],
-    )
-    op.create_index(
-        "idx_feature_set_semantic_type_tag_feature",
-        "feature",
-        ["set_id", "semantic_type_id", "tag_id", "feature"],
-    )
-
-    # 2) history changes
-    with op.batch_alter_table("history", schema=None) as b:
-        b.alter_column(
-            "create_at",
-            new_column_name="created_at",
-            existing_type=pg.TIMESTAMP(timezone=True),
-        )
-    op.alter_column(
-        "history",
-        "created_at",
-        type_=sa.TIMESTAMP(timezone=False),
-        postgresql_using="created_at::timestamp",
-        existing_type=pg.TIMESTAMP(timezone=True),
-    )
-    op.alter_column(
-        "history",
-        "metadata",
-        type_=pg.JSONB(),
-        postgresql_using="metadata::jsonb",
-        server_default=sa.text("'{}'::jsonb"),
-    )
-
-    # 2a) New join table and backfill
-    op.create_table(
-        "set_ingested_history",
-        sa.Column("set_id", sa.String(), nullable=False),
-        sa.Column("history_id", sa.Integer(), nullable=False),
-        sa.Column(
-            "ingested",
-            sa.Boolean(),
-            server_default=sa.text("false"),
-            nullable=True,
-        ),
-        sa.ForeignKeyConstraint(
-            ["history_id"],
-            ["history.id"],
-            ondelete="CASCADE",
-            onupdate="CASCADE",
-        ),
-        sa.PrimaryKeyConstraint("set_id", "history_id"),
+    # Drop existing indexes if they exist before creating new ones
+    op.execute("DROP INDEX IF EXISTS idx_feature_set_id")
+    op.execute("DROP INDEX IF EXISTS idx_feature_set_id_semantic_type")
+    op.execute("DROP INDEX IF EXISTS idx_feature_set_semantic_type_tag")
+    op.execute("DROP INDEX IF EXISTS idx_feature_set_semantic_type_tag_feature")
+    # Create indexes
+    op.execute(
+        """
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM pg_indexes
+                WHERE schemaname = 'public' AND indexname = 'idx_feature_set_id'
+            ) THEN
+                CREATE INDEX idx_feature_set_id ON feature (set_id);
+            END IF;
+        END$$;
+        """,
     )
     op.execute(
         """
-        INSERT INTO set_ingested_history (set_id, history_id, ingested)
-        SELECT user_id, id, COALESCE(ingested, false)
-        FROM history
-        WHERE user_id IS NOT NULL
-        ON CONFLICT DO NOTHING
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM pg_indexes
+                WHERE schemaname = 'public' AND indexname = 'idx_feature_set_id_semantic_type'
+            ) THEN
+                CREATE INDEX idx_feature_set_id_semantic_type ON feature (set_id, semantic_type_id);
+            END IF;
+        END$$;
+        """,
+    )
+    op.execute(
+        """
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM pg_indexes
+                WHERE schemaname = 'public' AND indexname = 'idx_feature_set_semantic_type_tag'
+            ) THEN
+                CREATE INDEX idx_feature_set_semantic_type_tag ON feature (set_id, semantic_type_id, tag_id);
+            END IF;
+        END$$;
+        """,
+    )
+    op.execute(
+        """
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM pg_indexes
+                WHERE schemaname = 'public' AND indexname = 'idx_feature_set_semantic_type_tag_feature'
+            ) THEN
+                CREATE INDEX idx_feature_set_semantic_type_tag_feature ON feature (set_id, semantic_type_id, tag_id, feature);
+            END IF;
+        END$$;
+        """,
+    )
+
+    # 2) history changes
+    # Rename create_at to created_at if needed
+    op.execute(
+        """
+        DO $$
+        BEGIN
+            IF EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_schema = 'public' AND table_name = 'history' AND column_name = 'create_at'
+            ) AND NOT EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_schema = 'public' AND table_name = 'history' AND column_name = 'created_at'
+            ) THEN
+                ALTER TABLE history RENAME COLUMN create_at TO created_at;
+            END IF;
+        END$$;
+        """,
+    )
+    # Change created_at type if it exists and is timestamptz
+    op.execute(
+        """
+        DO $$
+        BEGIN
+            IF EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_schema = 'public' AND table_name = 'history' 
+                  AND column_name = 'created_at'
+                  AND data_type = 'timestamp with time zone'
+            ) THEN
+                ALTER TABLE history ALTER COLUMN created_at TYPE timestamp USING created_at::timestamp;
+            END IF;
+        END$$;
+        """,
+    )
+    # Change metadata type if it exists and is not jsonb
+    op.execute(
+        """
+        DO $$
+        BEGIN
+            IF EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_schema = 'public' AND table_name = 'history' AND column_name = 'metadata'
+            ) THEN
+                -- Set default if not already set
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_schema = 'public' AND table_name = 'history' 
+                      AND column_name = 'metadata'
+                      AND column_default = '''{}''::jsonb'
+                ) THEN
+                    ALTER TABLE history ALTER COLUMN metadata SET DEFAULT '{}'::jsonb;
+                END IF;
+                -- Change type if not already jsonb
+                IF EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_schema = 'public' AND table_name = 'history' 
+                      AND column_name = 'metadata'
+                      AND data_type != 'jsonb'
+                ) THEN
+                    ALTER TABLE history ALTER COLUMN metadata TYPE jsonb USING metadata::jsonb;
+                END IF;
+            END IF;
+        END$$;
+        """,
+    )
+
+    # 2a) New join table and backfill
+    # Check if table exists before creating
+    op.execute(
+        """
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM information_schema.tables
+                WHERE table_schema = 'public' AND table_name = 'set_ingested_history'
+            ) THEN
+                CREATE TABLE set_ingested_history (
+                    set_id VARCHAR NOT NULL,
+                    history_id INTEGER NOT NULL,
+                    ingested BOOLEAN DEFAULT false,
+                    PRIMARY KEY (set_id, history_id),
+                    FOREIGN KEY(history_id) REFERENCES history (id) ON DELETE CASCADE ON UPDATE CASCADE
+                );
+            END IF;
+        END$$;
+        """,
+    )
+    # Backfill set_ingested_history only if history table has user_id column
+    op.execute(
+        """
+        DO $$
+        BEGIN
+            IF EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_schema = 'public' AND table_name = 'history' AND column_name = 'user_id'
+            ) THEN
+                INSERT INTO set_ingested_history (set_id, history_id, ingested)
+                SELECT user_id, id, COALESCE(ingested, false)
+                FROM history
+                WHERE user_id IS NOT NULL
+                ON CONFLICT DO NOTHING;
+            END IF;
+        END$$;
         """,
     )
 
     # 2b) Drop legacy columns / indexes
-    with op.batch_alter_table("history", schema=None) as b:
-        b.drop_column("user_id")
-        b.drop_column("ingested")
-        b.drop_column("isolations")
+    op.execute(
+        """
+        DO $$
+        BEGIN
+            IF EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_schema = 'public' AND table_name = 'history' AND column_name = 'user_id'
+            ) THEN
+                ALTER TABLE history DROP COLUMN user_id;
+            END IF;
+            IF EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_schema = 'public' AND table_name = 'history' AND column_name = 'ingested'
+            ) THEN
+                ALTER TABLE history DROP COLUMN ingested;
+            END IF;
+            IF EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_schema = 'public' AND table_name = 'history' AND column_name = 'isolations'
+            ) THEN
+                ALTER TABLE history DROP COLUMN isolations;
+            END IF;
+        END$$;
+        """,
+    )
     op.execute("DROP INDEX IF EXISTS history_user_idx")
     op.execute("DROP INDEX IF EXISTS history_user_ingested_idx")
     op.execute("DROP INDEX IF EXISTS history_user_ingested_ts_desc")
 
     # 3) citations column renames (preserve data) + rebuild FKs
-    with op.batch_alter_table("citations", schema=None) as b:
-        # rename legacy columns if present
-        with contextlib.suppress(Exception):
-            b.alter_column(
-                "profile_id",
-                new_column_name="feature_id",
-                existing_type=sa.Integer,
-            )
-        with contextlib.suppress(Exception):
-            b.alter_column(
-                "content_id",
-                new_column_name="history_id",
-                existing_type=sa.Integer,
-            )
+    # Check if columns exist before renaming
+    op.execute(
+        """
+        DO $$
+        BEGIN
+            -- Rename profile_id to feature_id if profile_id exists and feature_id doesn't
+            IF EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_schema = 'public' AND table_name = 'citations' AND column_name = 'profile_id'
+            ) AND NOT EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_schema = 'public' AND table_name = 'citations' AND column_name = 'feature_id'
+            ) THEN
+                ALTER TABLE citations RENAME COLUMN profile_id TO feature_id;
+            END IF;
+            
+            -- Rename content_id to history_id if content_id exists and history_id doesn't
+            IF EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_schema = 'public' AND table_name = 'citations' AND column_name = 'content_id'
+            ) AND NOT EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_schema = 'public' AND table_name = 'citations' AND column_name = 'history_id'
+            ) THEN
+                ALTER TABLE citations RENAME COLUMN content_id TO history_id;
+                -- Change type from INTEGER to VARCHAR if needed
+                -- Check current type first
+                IF EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_schema = 'public' AND table_name = 'citations' 
+                      AND column_name = 'history_id' 
+                      AND data_type = 'integer'
+                ) THEN
+                    ALTER TABLE citations ALTER COLUMN history_id TYPE VARCHAR USING history_id::text;
+                END IF;
+            END IF;
+        END$$;
+        """,
+    )
 
     # Drop existing FKs (unknown names) and recreate with explicit names
     op.execute(
@@ -205,23 +448,36 @@ def upgrade() -> None:
         END$$;
         """,
     )
-    with op.batch_alter_table("citations", schema=None) as b:
-        b.create_foreign_key(
-            "fk_citations_feature",
-            "feature",
-            local_cols=["feature_id"],
-            remote_cols=["id"],
-            ondelete="CASCADE",
-            onupdate="CASCADE",
-        )
-        b.create_foreign_key(
-            "fk_citations_history",
-            "history",
-            local_cols=["history_id"],
-            remote_cols=["id"],
-            ondelete="CASCADE",
-            onupdate="CASCADE",
-        )
+    # Create foreign keys only if columns exist and constraints don't exist
+    op.execute(
+        """
+        DO $$
+        BEGIN
+            -- Add foreign key for feature_id if it exists and constraint doesn't
+            IF EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_schema = 'public' AND table_name = 'citations' AND column_name = 'feature_id'
+            ) AND EXISTS (
+                SELECT 1 FROM information_schema.tables
+                WHERE table_schema = 'public' AND table_name = 'feature'
+            ) AND NOT EXISTS (
+                SELECT 1 FROM pg_constraint
+                WHERE conrelid = 'citations'::regclass
+                  AND conname = 'fk_citations_feature'
+            ) THEN
+                ALTER TABLE citations
+                ADD CONSTRAINT fk_citations_feature
+                FOREIGN KEY (feature_id) REFERENCES feature(id)
+                ON DELETE CASCADE ON UPDATE CASCADE;
+            END IF;
+            
+            -- Add foreign key for history_id if it exists and constraint doesn't
+            -- Note: history_id is now VARCHAR (episode uid), not INTEGER (history.id),
+            -- so we don't create a foreign key constraint for it.
+            -- The Alembic migration will handle this properly.
+        END$$;
+        """,
+    )
 
 
 def downgrade() -> None:

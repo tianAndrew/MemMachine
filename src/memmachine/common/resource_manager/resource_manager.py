@@ -1,6 +1,7 @@
 """Resource manager wiring together storage, embedders, and models."""
 
 import asyncio
+from typing import Any
 
 from neo4j import AsyncDriver
 from sqlalchemy.ext.asyncio import AsyncEngine
@@ -87,9 +88,179 @@ class ResourceManagerImpl:
             engine = await self._database_manager.async_get_sql_engine(database)
             self._episode_storage = SqlAlchemyEpisodeStore(engine)
             async with engine.begin() as conn:
-                await conn.exec_driver_sql("CREATE EXTENSION IF NOT EXISTS vector")
+                # Only create vector extension for PostgreSQL
+                if engine.dialect.name == "postgresql":
+                    await conn.exec_driver_sql("CREATE EXTENSION IF NOT EXISTS vector")
                 await conn.run_sync(BaseEpisodeStore.metadata.create_all)
-                await conn.run_sync(BaseSemanticStorage.metadata.create_all)
+                # Add uid column if it doesn't exist (migration for existing tables)
+                await self._add_uid_column_if_missing(conn, engine.dialect.name)
+                # Only create semantic storage tables for PostgreSQL
+                if engine.dialect.name == "postgresql":
+                    await conn.run_sync(BaseSemanticStorage.metadata.create_all)
+                    # Fix citations table column names if needed (migration for existing tables)
+                    await self._fix_citations_table_columns(conn, engine.dialect.name)
+
+    async def _add_uid_column_if_missing(
+        self,
+        conn: Any,
+        dialect_name: str,
+    ) -> None:
+        """Add uid column to episodestore table if it doesn't exist."""
+        from sqlalchemy import inspect, text
+
+        # Check if column exists
+        def check_and_add(sync_conn: Any) -> None:
+            inspector = inspect(sync_conn.engine)
+            table_exists = "episodestore" in inspector.get_table_names()
+            
+            if not table_exists:
+                return  # Table doesn't exist, create_all will handle it
+            
+            columns = [col["name"] for col in inspector.get_columns("episodestore")]
+            if "uid" in columns:
+                return  # Column already exists
+            
+            # Add the column
+            if dialect_name == "postgresql":
+                # PostgreSQL doesn't support IF NOT EXISTS in ALTER TABLE ADD COLUMN
+                # We check if column exists above, so we can safely add it
+                try:
+                    sync_conn.execute(
+                        text("ALTER TABLE episodestore ADD COLUMN uid VARCHAR")
+                    )
+                    sync_conn.execute(
+                        text("CREATE UNIQUE INDEX ix_episodestore_uid ON episodestore(uid)")
+                    )
+                    sync_conn.commit()
+                except Exception:
+                    # Column might have been added by another process, ignore
+                    sync_conn.rollback()
+                    pass
+            elif dialect_name == "sqlite":
+                # SQLite doesn't support IF NOT EXISTS in ALTER TABLE
+                try:
+                    sync_conn.execute(
+                        text("ALTER TABLE episodestore ADD COLUMN uid VARCHAR")
+                    )
+                    sync_conn.execute(
+                        text("CREATE INDEX IF NOT EXISTS ix_episodestore_uid ON episodestore(uid)")
+                    )
+                except Exception:
+                    # Column might already exist, ignore
+                    pass
+        
+        await conn.run_sync(check_and_add)
+
+    async def _fix_citations_table_columns(
+        self,
+        conn: Any,
+        dialect_name: str,
+    ) -> None:
+        """Fix citations table column names if they use old names."""
+        from sqlalchemy import inspect, text
+
+        def check_and_fix(sync_conn: Any) -> None:
+            inspector = inspect(sync_conn.engine)
+            table_exists = "citations" in inspector.get_table_names()
+            
+            if not table_exists:
+                return  # Table doesn't exist, create_all will handle it
+            
+            columns = {col["name"]: col for col in inspector.get_columns("citations")}
+            
+            # Check if table has old column names
+            has_old_columns = "profile_id" in columns or "content_id" in columns
+            has_new_columns = "feature_id" in columns and "history_id" in columns
+            
+            if has_new_columns:
+                return  # Already has correct columns
+            
+            if not has_old_columns:
+                return  # Table exists but has neither old nor new columns, let create_all handle it
+            
+            # Migrate from old column names to new ones
+            if dialect_name == "postgresql":
+                try:
+                    # First, drop all foreign key constraints on citations table
+                    # This is necessary before changing column types
+                    sync_conn.execute(
+                        text("""
+                            DO $$
+                            DECLARE r record;
+                            BEGIN
+                                FOR r IN
+                                    SELECT conname
+                                    FROM pg_constraint
+                                    WHERE conrelid = 'citations'::regclass
+                                      AND contype = 'f'
+                                LOOP
+                                    EXECUTE format('ALTER TABLE citations DROP CONSTRAINT IF EXISTS %I', r.conname);
+                                END LOOP;
+                            END$$;
+                        """)
+                    )
+                    
+                    # Rename columns if they exist
+                    if "profile_id" in columns and "feature_id" not in columns:
+                        sync_conn.execute(
+                            text("ALTER TABLE citations RENAME COLUMN profile_id TO feature_id")
+                        )
+                    if "content_id" in columns and "history_id" not in columns:
+                        # Check if content_id is INTEGER, if so we need to change it to VARCHAR
+                        if columns["content_id"]["type"].python_type == int:
+                            # First rename, then change type
+                            sync_conn.execute(
+                                text("ALTER TABLE citations RENAME COLUMN content_id TO history_id")
+                            )
+                            sync_conn.execute(
+                                text("ALTER TABLE citations ALTER COLUMN history_id TYPE VARCHAR USING history_id::text")
+                            )
+                        else:
+                            sync_conn.execute(
+                                text("ALTER TABLE citations RENAME COLUMN content_id TO history_id")
+                            )
+                    
+                    # Recreate foreign key constraints if columns exist
+                    # Note: history_id is now VARCHAR (episode uid), not INTEGER (history.id),
+                    # so we don't create a foreign key constraint for it
+                    sync_conn.execute(
+                        text("""
+                            DO $$
+                            BEGIN
+                                -- Add foreign key for feature_id if it exists and constraint doesn't
+                                IF EXISTS (
+                                    SELECT 1 FROM information_schema.columns
+                                    WHERE table_schema = 'public' AND table_name = 'citations' AND column_name = 'feature_id'
+                                ) AND NOT EXISTS (
+                                    SELECT 1 FROM pg_constraint
+                                    WHERE conrelid = 'citations'::regclass
+                                      AND conname = 'fk_citations_feature'
+                                ) THEN
+                                    ALTER TABLE citations
+                                    ADD CONSTRAINT fk_citations_feature
+                                    FOREIGN KEY (feature_id) REFERENCES feature(id)
+                                    ON DELETE CASCADE ON UPDATE CASCADE;
+                                END IF;
+                                
+                                -- Note: history_id is VARCHAR (episode uid), not INTEGER (history.id),
+                                -- so we don't create a foreign key constraint for it.
+                                -- The Alembic migration will handle this properly.
+                            END$$;
+                        """)
+                    )
+                    
+                    sync_conn.commit()
+                except Exception as e:
+                    sync_conn.rollback()
+                    # Log but don't fail - migration might have been done by another process
+                    import logging
+                    logger = logging.getLogger(__name__)
+                    logger.warning(
+                        "Failed to migrate citations table columns: %s",
+                        e,
+                    )
+        
+        await conn.run_sync(check_and_fix)
 
     async def close(self) -> None:
         """Close resources and clean up state."""
@@ -138,6 +309,7 @@ class ResourceManagerImpl:
                 "session_data_manager must be initialized via build() first"
             )
         return self._session_data_manager
+
 
     @property
     def episodic_memory_manager(self) -> EpisodicMemoryManager:
