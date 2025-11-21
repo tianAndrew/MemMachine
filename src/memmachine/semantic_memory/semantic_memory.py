@@ -95,42 +95,8 @@ class SemanticService:
         limit: int | None = 30,
         load_citations: bool = False,
     ) -> list[SemanticFeature]:
-        logger.info(
-            "Semantic search: set_ids=%s, query='%s', min_distance=%s, limit=%s",
-            set_ids,
-            query[:100] if query else "empty",
-            min_distance,
-            limit,
-        )
         resources = self._resource_retriever.get_resources(set_ids[0])
         query_embedding = (await resources.embedder.search_embed([query]))[0]
-
-        # First, check if there are any features at all for these set_ids
-        all_features = await self._semantic_storage.get_feature_set(
-            set_ids=set_ids,
-            category_names=category_names,
-            tags=tag_names,
-            feature_names=feature_names,
-            limit=1000,  # Get more to check
-            load_citations=False,
-        )
-        logger.info(
-            "Found %d total feature(s) for set_ids=%s (before vector search)",
-            len(all_features),
-            set_ids,
-        )
-        if all_features:
-            logger.debug(
-                "Sample features: %s",
-                [
-                    {
-                        "tag": f.tag,
-                        "feature": f.feature_name,
-                        "value": f.value[:50] if f.value else "empty",
-                    }
-                    for f in all_features[:5]
-                ],
-            )
 
         # Try with the specified min_distance first
         current_min_distance = min_distance
@@ -147,12 +113,8 @@ class SemanticService:
             load_citations=load_citations,
         )
         
-        # If no results and we have features, try with progressively lower thresholds
-        if len(results) == 0 and len(all_features) > 0:
-            logger.info(
-                "No results with min_distance=%s, trying with lower thresholds",
-                current_min_distance,
-            )
+        # If no results, try with progressively lower thresholds
+        if len(results) == 0:
             for lower_threshold in [0.2, 0.1, 0.0]:
                 current_min_distance = lower_threshold
                 results = await self._semantic_storage.get_feature_set(
@@ -168,19 +130,8 @@ class SemanticService:
                     load_citations=load_citations,
                 )
                 if len(results) > 0:
-                    logger.info(
-                        "Found %d result(s) with min_distance=%s",
-                        len(results),
-                        current_min_distance,
-                    )
                     break
         
-        logger.info(
-            "Semantic search returned %d result(s) for set_ids=%s (final min_distance=%s)",
-            len(results),
-            set_ids,
-            current_min_distance,
-        )
         return results
 
     @validate_call

@@ -287,24 +287,7 @@ async def add_memories(
         for message in spec.messages
     ]
     await episodic_memory.add_memory_episodes(episodes=episodes)
-    
-    # Also store episodes to episode_storage for semantic ingestion
-    await asyncio.gather(
-        *[
-            episode_storage.add_episode(
-                content=ep.content,
-                session_key=ep.session_key,
-                producer_id=ep.producer_id,
-                producer_role=ep.producer_role,
-                produced_for_id=ep.produced_for_id,
-                episode_type=ep.episode_type,
-                metadata=ep.metadata,
-                created_at=ep.created_at,
-                uid=ep.uid,
-            )
-            for ep in episodes
-        ]
-    )
+
 
     # Add episodes to semantic storage for ingestion
     session_id_manager = semantic_manager.simple_semantic_session_id_manager

@@ -314,14 +314,6 @@ class IngestionService:
         for command in commands:
             match command.command:
                 case SemanticCommandType.ADD:
-                    logger.info(
-                        "Adding feature: set_id=%s, category=%s, tag=%s, feature=%s, value=%s",
-                        set_id,
-                        category_name,
-                        command.tag,
-                        command.feature,
-                        command.value[:100] if command.value else "empty",
-                    )
                     value_embedding = (await embedder.ingest_embed([command.value]))[0]
 
                     f_id = await self._semantic_storage.add_feature(
@@ -332,19 +324,9 @@ class IngestionService:
                         tag=command.tag,
                         embedding=np.array(value_embedding),
                     )
-                    logger.info(
-                        "Successfully stored feature with id=%s for set_id=%s",
-                        f_id,
-                        set_id,
-                    )
 
                     if citation_id is not None:
                         await self._semantic_storage.add_citations(f_id, [citation_id])
-                        logger.info(
-                            "Added citation: feature_id=%s, citation_id=%s",
-                            f_id,
-                            citation_id,
-                        )
 
                 case SemanticCommandType.DELETE:
                     await self._semantic_storage.delete_feature_set(
