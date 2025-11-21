@@ -88,7 +88,7 @@ class SemanticService:
         set_ids: list[SetIdT],
         query: str,
         *,
-        min_distance: float = 0.7,
+        min_distance: float = 0.2,
         category_names: list[str] | None = None,
         tag_names: list[str] | None = None,
         feature_names: list[str] | None = None,

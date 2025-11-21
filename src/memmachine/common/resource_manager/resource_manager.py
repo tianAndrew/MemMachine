@@ -1,8 +1,10 @@
 """Resource manager wiring together storage, embedders, and models."""
 
 import asyncio
+from typing import Any
 
 from neo4j import AsyncDriver
+from sqlalchemy import inspect, text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from memmachine.common.configuration import Configuration
@@ -87,9 +89,59 @@ class ResourceManagerImpl:
             engine = await self._database_manager.async_get_sql_engine(database)
             self._episode_storage = SqlAlchemyEpisodeStore(engine)
             async with engine.begin() as conn:
-                await conn.exec_driver_sql("CREATE EXTENSION IF NOT EXISTS vector")
+                # Only create vector extension for PostgreSQL
+                if engine.dialect.name == "postgresql":
+                    await conn.exec_driver_sql("CREATE EXTENSION IF NOT EXISTS vector")
                 await conn.run_sync(BaseEpisodeStore.metadata.create_all)
-                await conn.run_sync(BaseSemanticStorage.metadata.create_all)
+                # Add uid column if it doesn't exist (migration for existing tables)
+                await self._add_uid_column_if_missing(conn, engine.dialect.name)
+                # Only create semantic storage tables for PostgreSQL
+                if engine.dialect.name == "postgresql":
+                    await conn.run_sync(BaseSemanticStorage.metadata.create_all)
+
+    async def _add_uid_column_if_missing(
+        self,
+        conn: Any,
+        dialect_name: str,
+    ) -> None:
+        """Add uid column to episodestore table if it doesn't exist."""
+        # Check if column exists
+        def check_and_add(sync_conn: Any) -> None:
+            inspector = inspect(sync_conn.engine)
+            table_exists = "episodestore" in inspector.get_table_names()
+
+            if not table_exists:
+                return  # Table doesn't exist, create_all will handle it
+
+            columns = [col["name"] for col in inspector.get_columns("episodestore")]
+            if "uid" in columns:
+                return  # Column already exists
+
+            # Add the column
+            if dialect_name == "postgresql":
+                try:
+                    sync_conn.execute(
+                        text("ALTER TABLE episodestore ADD COLUMN uid VARCHAR")
+                    )
+                    sync_conn.execute(
+                        text("CREATE UNIQUE INDEX IF NOT EXISTS ix_episodestore_uid ON episodestore(uid)")
+                    )
+                    sync_conn.commit()
+                except Exception:
+                    sync_conn.rollback()
+                    pass
+            elif dialect_name == "sqlite":
+                try:
+                    sync_conn.execute(
+                        text("ALTER TABLE episodestore ADD COLUMN uid VARCHAR")
+                    )
+                    sync_conn.execute(
+                        text("CREATE INDEX IF NOT EXISTS ix_episodestore_uid ON episodestore(uid)")
+                    )
+                except Exception:
+                    pass
+
+        await conn.run_sync(check_and_add)
 
     async def close(self) -> None:
         """Close resources and clean up state."""

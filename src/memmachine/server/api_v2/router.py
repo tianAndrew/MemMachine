@@ -16,6 +16,7 @@ from memmachine.common.configuration.episodic_config import (
 from memmachine.common.resource_manager.semantic_manager import SemanticResourceManager
 from memmachine.common.session_manager.session_data_manager import SessionDataManager
 from memmachine.episode_store.episode_model import Episode
+from memmachine.episode_store.episode_storage import EpisodeStorage
 from memmachine.episodic_memory.episodic_memory import EpisodicMemory
 from memmachine.episodic_memory.episodic_memory_manager import EpisodicMemoryManager
 from memmachine.semantic_memory.semantic_session_resource import (
@@ -64,6 +65,11 @@ async def get_episodic_memory_manager(request: Request) -> EpisodicMemoryManager
 async def get_semantic_memory_manager(request: Request) -> SemanticResourceManager:
     """Get semantic memory manager instance."""
     return await request.app.state.resource_manager.get_semantic_manager()
+
+
+async def get_episode_storage(request: Request) -> EpisodeStorage:
+    """Get episode storage instance."""
+    return request.app.state.resource_manager.episode_storage
 
 
 async def get_global_config(request: Request) -> Configuration:
@@ -258,6 +264,7 @@ async def add_memories(
     semantic_manager: Annotated[
         SemanticResourceManager, Depends(get_semantic_memory_manager)
     ],
+    episode_storage: Annotated[EpisodeStorage, Depends(get_episode_storage)],
 ) -> None:
     """Add memories to a project."""
     session_key = f"{spec.org_id}/{spec.project_id}"
@@ -276,6 +283,26 @@ async def add_memories(
         for message in spec.messages
     ]
     await episodic_memory.add_memory_episodes(episodes=episodes)
+
+    # Also store episodes to episode_storage for semantic ingestion
+    import asyncio
+
+    await asyncio.gather(
+        *[
+            episode_storage.add_episode(
+                content=ep.content,
+                session_key=ep.session_key,
+                producer_id=ep.producer_id,
+                producer_role=ep.producer_role,
+                produced_for_id=ep.produced_for_id,
+                episode_type=ep.episode_type,
+                metadata=ep.metadata,
+                created_at=ep.created_at,
+                uid=ep.uid,
+            )
+            for ep in episodes
+        ]
+    )
 
     session_id_manager = semantic_manager.simple_semantic_session_id_manager
     semantic_session_manager = await semantic_manager.get_semantic_session_manager()
