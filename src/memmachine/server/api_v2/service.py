@@ -59,18 +59,22 @@ async def _add_messages_to(
     spec: AddMemoriesSpec,
     memmachine: MemMachine,
 ) -> list[AddMemoryResult]:
-    episodes: list[EpisodeEntry] = [
-        EpisodeEntry(
-            content=message.content,
-            producer_id=message.producer,
-            produced_for_id=message.produced_for,
-            producer_role=message.role,
-            created_at=message.timestamp,
-            metadata=cast(dict[str, JsonValue], message.metadata),
-            episode_type=message.episode_type,
+    episodes: list[EpisodeEntry] = []
+    for message in spec.messages:
+        meta: dict[str, JsonValue] = dict(message.metadata) if message.metadata else {}
+        if getattr(message, "image_path", None):
+            meta["image_path"] = message.image_path
+        episodes.append(
+            EpisodeEntry(
+                content=message.content,
+                producer_id=message.producer,
+                produced_for_id=message.produced_for,
+                producer_role=message.role,
+                created_at=message.timestamp,
+                metadata=meta or None,
+                episode_type=message.episode_type,
+            )
         )
-        for message in spec.messages
-    ]
 
     episode_ids = await memmachine.add_episodes(
         session_data=_SessionData(

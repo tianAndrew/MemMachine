@@ -179,6 +179,12 @@ class SpecDoc:
     The type of an episode (e.g., 'message').
     """
 
+    MEMORY_IMAGE_PATH = """
+    Optional local file path of the image when adding multi-modal (image) memory.
+    Stored in episode metadata as 'image_path' and returned in list/search so
+    clients can attach the path when presenting image-related memories.
+    """
+
     MEMORY_MESSAGES = """
     A list of messages to be added (batch input).
     Must contain at least one message.

@@ -69,6 +69,16 @@ class OpenAIEmbedderConf(MetricsFactoryIdMixin, YamlSerializableMixin, ApiKeyMix
         description="Maximal retry interval in seconds when retrying API calls",
         gt=0,
     )
+    max_inputs_per_request: int | None = Field(
+        default=None,
+        description=(
+            "Max texts per embedding API request. "
+            "If unset, uses embedder default (2048). "
+            "Set to 10 for APIs that limit batch size (e.g. Alibaba DashScope)."
+        ),
+        gt=0,
+        le=2048,
+    )
 
     @field_validator("base_url")
     @classmethod

@@ -1,11 +1,15 @@
 """Helpers for building long-term memory from configuration."""
 
+import logging
+
 from pydantic import InstanceOf
 
 from memmachine.common.configuration.episodic_config import LongTermMemoryConf
 from memmachine.common.resource_manager import CommonResourceManager
 
 from .long_term_memory import LongTermMemoryParams
+
+logger = logging.getLogger(__name__)
 
 
 async def long_term_memory_params_from_config(
@@ -18,6 +22,10 @@ async def long_term_memory_params_from_config(
     )
     embedder = await resource_manager.get_embedder(config.embedder, validate=True)
     reranker = await resource_manager.get_reranker(config.reranker, validate=True)
+    logger.info(
+        "Long-term memory using reranker: %s",
+        config.reranker,
+    )
     return LongTermMemoryParams(
         session_id=config.session_id,
         vector_graph_store=vector_graph_store,

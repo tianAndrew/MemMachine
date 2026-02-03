@@ -486,6 +486,13 @@ class MemoryMessage(BaseModel):
             description=SpecDoc.MEMORY_EPISODIC_TYPE,
         ),
     ]
+    image_path: Annotated[
+        str | None,
+        Field(
+            default=None,
+            description=SpecDoc.MEMORY_IMAGE_PATH,
+        ),
+    ]
 
     @field_validator("timestamp", mode="before")
     @classmethod

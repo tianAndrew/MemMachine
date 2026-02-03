@@ -70,6 +70,10 @@ async def llm_feature_update(
     if parsed_output is None:
         return []
 
+    # Some LLMs return a list directly instead of {"commands": [...]}; normalize.
+    if isinstance(parsed_output, list):
+        parsed_output = {"commands": parsed_output}
+
     validated_output = TypeAdapter(_SemanticFeatureUpdateRes).validate_python(
         parsed_output,
     )

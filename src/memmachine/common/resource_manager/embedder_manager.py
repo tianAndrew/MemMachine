@@ -135,6 +135,7 @@ class EmbedderManager:
             dimensions=dimensions,
             max_input_length=conf.max_input_length,
             max_retry_interval_seconds=conf.max_retry_interval_seconds,
+            max_inputs_per_request=conf.max_inputs_per_request,
             metrics_factory=conf.get_metrics_factory(),
             user_metrics_labels=conf.user_metrics_labels,
         )

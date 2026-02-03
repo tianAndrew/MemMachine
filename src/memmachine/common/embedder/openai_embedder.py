@@ -58,6 +58,14 @@ class OpenAIEmbedderParams(BaseModel):
         default_factory=dict,
         description="Labels to attach to the collected metrics.",
     )
+    max_inputs_per_request: int | None = Field(
+        default=None,
+        description=(
+            "Max texts per API request. If None, uses class default (2048). "
+            "Set to 10 for providers that limit batch size (e.g. 10)."
+        ),
+        gt=0,
+    )
 
 
 class OpenAIEmbedder(Embedder):
@@ -84,6 +92,12 @@ class OpenAIEmbedder(Embedder):
         self._max_retry_interval_seconds = params.max_retry_interval_seconds
 
         self._max_input_length = params.max_input_length
+
+        self._max_num_inputs_per_request = (
+            params.max_inputs_per_request
+            if params.max_inputs_per_request is not None
+            else self.max_num_inputs_per_request
+        )
 
         metrics_factory = params.metrics_factory
 
@@ -148,7 +162,7 @@ class OpenAIEmbedder(Embedder):
         chunks = [chunk for input_chunks in inputs_chunks for chunk in input_chunks]
         chunk_clusters = cluster_texts(
             chunks,
-            self.max_num_inputs_per_request,
+            self._max_num_inputs_per_request,
             self.max_total_input_length_per_request,
         )
 
@@ -289,12 +303,14 @@ class OpenAIEmbedder(Embedder):
                 sleep_seconds *= 2
                 continue
             except (openai.APIError, openai.OpenAIError) as err:
+                err_detail = str(err).strip() or getattr(err, "message", "")
                 error_message = (
                     f"[call uuid: {embed_call_uuid}] "
                     "Giving up creating embeddings "
                     f"for cluster number {cluster_number} "
                     f"after failed attempt {attempt} "
                     f"due to non-retryable {type(err).__name__}"
+                    + (f": {err_detail}" if err_detail else "")
                 )
                 logger.exception(error_message)
                 raise ExternalServiceAPIError(error_message) from err

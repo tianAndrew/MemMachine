@@ -162,9 +162,11 @@ async def _parse_add_memories_request(
     request: Request,
     image: Annotated[UploadFile | None, File()] = None,
     spec: Annotated[str | None, Form()] = None,
+    image_path: Annotated[str | None, Form()] = None,
 ) -> tuple[AddMemoriesSpec, UploadFile | None]:
     """Parse AddMemories request from either JSON body or multipart form-data (spec + image).
-    File() before Form() so FastAPI correctly parses multipart when both are present."""
+    File() before Form() so FastAPI correctly parses multipart when both are present.
+    Optional form field image_path is stored in episode metadata for multi-modal recall."""
     content_type = request.headers.get("content-type", "")
 
     if spec is not None:
@@ -173,7 +175,10 @@ async def _parse_add_memories_request(
         except json.JSONDecodeError as e:
             raise RestError(code=422, message="Invalid request payload: spec is not valid JSON", ex=e) from e
         try:
-            return AddMemoriesSpec(**raw), image
+            parsed = AddMemoriesSpec(**raw)
+            if image_path and image_path.strip() and len(parsed.messages) > 0:
+                parsed.messages[0].image_path = image_path.strip()
+            return parsed, image
         except ValidationError as e:
             raise RestError(code=422, message="Invalid request payload", ex=e) from e
 

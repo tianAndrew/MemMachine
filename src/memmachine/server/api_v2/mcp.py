@@ -320,16 +320,32 @@ mem_machine: MemMachine | None = None
 # === Lifespan Management ===
 
 
+def _default_config_paths() -> list[Path]:
+    """Return candidate config paths: cwd, then repo root (relative to this file)."""
+    candidates: list[Path] = []
+    # Current working directory
+    cwd = Path.cwd()
+    candidates.extend([cwd / "cfg.yml", cwd / "configuration.yml"])
+    # Repo root: this file is src/memmachine/server/api_v2/mcp.py -> 4 levels up to src, 5 to repo root
+    this_file = Path(__file__).resolve()
+    repo_root = this_file.parent.parent.parent.parent.parent
+    if repo_root != cwd:
+        candidates.extend([repo_root / "cfg.yml", repo_root / "configuration.yml"])
+    return candidates
+
+
 def load_configuration() -> Configuration:
     """Load configuration from the specified YAML file."""
     config_file = os.getenv("MEMORY_CONFIG")
     if not config_file:
-        # search cfg.yml in home directory and current directory
         home_cfg = Path("~/.config/memmachine/cfg.yml").expanduser()
         if home_cfg.exists():
             config_file = str(home_cfg)
-        elif Path("cfg.yml").exists():
-            config_file = "cfg.yml"
+        else:
+            for path in _default_config_paths():
+                if path.exists():
+                    config_file = str(path)
+                    break
     if config_file is None or not Path(config_file).exists():
         raise FileNotFoundError(f"Configuration file '{config_file}' not found.")
     ret = Configuration.load_yml_file(config_file)

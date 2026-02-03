@@ -31,6 +31,9 @@ from memmachine.common.api.spec import (
     SearchResult,
 )
 
+# Key in episode metadata where the optional local image path is stored
+IMAGE_PATH_METADATA_KEY = "image_path"
+
 if TYPE_CHECKING:
     from .client import MemMachineClient
 
@@ -196,6 +199,7 @@ class Memory:
         episode_type: EpisodeType | None,
         metadata: dict[str, str] | None,
         timestamp: datetime | None,
+        image_path: str | None = None,
     ) -> MemoryMessage:
         """Build a MemoryMessage object from parameters."""
         # Build metadata including old context fields and episode_type
@@ -219,6 +223,8 @@ class Memory:
             message.timestamp = timestamp
         if episode_type is not None:
             message.episode_type = episode_type
+        if image_path is not None:
+            message.image_path = image_path
 
         return message
 
@@ -235,12 +241,15 @@ class Memory:
         timeout: int | None = None,
         image: bytes | str | Path | None = None,
         image_mime_type: str | None = None,
+        image_path: str | None = None,
     ) -> builtins.list[AddMemoryResult]:
         """
         Add a memory episode.
 
         Optionally attach an image: the server will summarize it with a vision
         model and append the summary to the message content before storing.
+        When image is a file path or image_path is provided, the path is stored
+        in episode metadata and returned in list/search so clients can show it.
 
         Args:
             content: The content to store in memory
@@ -259,6 +268,9 @@ class Memory:
             image_mime_type: MIME type for the image (e.g. "image/jpeg", "image/png").
                              Used when image is bytes or a file-like; ignored when image
                              is a path (guessed from extension). Defaults to "image/jpeg".
+            image_path: Optional local file path for the image. Stored in episode metadata
+                        and returned in list/search. If image is a path and image_path is
+                        not provided, defaults to the resolved path of image.
 
         Returns:
             List of AddMemoryResult objects containing UID results from the server.
@@ -292,6 +304,13 @@ class Memory:
             # Validate role
             self._validate_role(role)
 
+            # Resolve image_path: explicit param, or from image when it is a path
+            resolved_image_path: str | None = image_path
+            if resolved_image_path is None and image is not None:
+                if isinstance(image, (str, Path)):
+                    resolved_image_path = str(Path(image).resolve())
+                # when image is bytes or file-like, image_path stays None unless provided
+
             # Build metadata including old context fields and episode_type
             message = self._build_memory_message(
                 content=content,
@@ -301,6 +320,7 @@ class Memory:
                 episode_type=episode_type,
                 metadata=metadata,
                 timestamp=timestamp,
+                image_path=resolved_image_path,
             )
 
             spec = AddMemoriesSpec(
@@ -316,6 +336,8 @@ class Memory:
                 image_bytes, mime_type = image_payload
                 # Multipart: spec as form field, image as file (server requires exactly one message)
                 data = {"spec": json.dumps(v2_data)}
+                if resolved_image_path:
+                    data["image_path"] = resolved_image_path
                 files = {
                     "image": ("image", io.BytesIO(image_bytes), mime_type),
                 }
@@ -516,6 +538,49 @@ class Memory:
             raise
         else:
             return search_result
+
+    @staticmethod
+    def episodes_with_image_paths(
+        result: SearchResult | ListResult,
+    ) -> list[tuple[Any, str]]:
+        """
+        Extract episodes that have an image path from a search or list result.
+
+        When memories were added with image_path (or image as file path), the
+        server stores it in episode metadata. This helper returns those
+        episodes together with their local path for display or attachment.
+
+        Args:
+            result: Return value from search() or list().
+
+        Returns:
+            List of (episode, image_path) for each episode whose metadata
+            contains "image_path". Episodes without image_path are omitted.
+        """
+        out: list[tuple[Any, str]] = []
+        if hasattr(result, "content") and result.content is None:
+            return out
+        content = getattr(result, "content", None)
+        if content is None:
+            return out
+        episodes: list[Any] = []
+        em = getattr(content, "episodic_memory", None)
+        if em is not None:
+            # ListResult: content.episodic_memory is list[Episode]
+            if isinstance(em, list):
+                episodes.extend(em)
+            else:
+                # SearchResult: episodic_memory has long_term_memory.episodes and short_term_memory.episodes
+                if hasattr(em, "long_term_memory") and em.long_term_memory is not None:
+                    episodes.extend(getattr(em.long_term_memory, "episodes", []) or [])
+                if hasattr(em, "short_term_memory") and em.short_term_memory is not None:
+                    episodes.extend(getattr(em.short_term_memory, "episodes", []) or [])
+        for ep in episodes:
+            meta = getattr(ep, "metadata", None) or {}
+            path = meta.get(IMAGE_PATH_METADATA_KEY) if isinstance(meta, dict) else None
+            if isinstance(path, str) and path.strip():
+                out.append((ep, path.strip()))
+        return out
 
     def get_context(self) -> dict[str, Any]:
         """
